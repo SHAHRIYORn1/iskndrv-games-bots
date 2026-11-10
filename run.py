@@ -12,9 +12,9 @@ logging.basicConfig(
     format="%(asctime)s - [%(levelname)s] - %(name)s - %(message)s"
 )
 
-# Render.com bepul Web Service uchun sog'liqni tekshiruvchi (Health-check) server
+# Render.com sog'liqni tekshiruvchi (Health-check) server
 async def handle_ping(request):
-    return web.Response(text="Iskndrv Games Bots are running 24/7!")
+    return web.Response(text="Iskndrv Games Bots are running 24/7!", status=200)
 
 async def start_web_server():
     app = web.Application()
@@ -22,10 +22,30 @@ async def start_web_server():
     app.router.add_get("/health", handle_ping)
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.environ.get("PORT", 8080))
+    
+    # Render PORT muhit o'zgaruvchisini beradi (odatda 10000)
+    port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logging.info(f"Web server port {port} da ishga tushirildi.")
+    logging.info(f"Web server 0.0.0.0:{port} manzilida ishga tushirildi.")
+
+async def run_admin_bot():
+    while True:
+        try:
+            logging.info("Admin bot polling boshlanmoqda...")
+            await admin_dp.start_polling(admin_bot, handle_signals=False)
+        except Exception as e:
+            logging.error(f"Admin Bot xatosi: {e}. 5 soniyadan so'ng qayta uriniladi...")
+            await asyncio.sleep(5)
+
+async def run_user_bot():
+    while True:
+        try:
+            logging.info("User bot polling boshlanmoqda...")
+            await user_dp.start_polling(user_bot, handle_signals=False)
+        except Exception as e:
+            logging.error(f"User Bot xatosi: {e}. 5 soniyadan so'ng qayta uriniladi...")
+            await asyncio.sleep(5)
 
 async def main():
     print("========================================")
@@ -34,28 +54,26 @@ async def main():
     print("2. User Bot:  @IskndrvGames_bot")
     print("========================================")
 
-    # Bazani ishga tushirish
+    # 1. Bazani ishga tushirish
     db.init_db()
 
-    # Webhooklarni tozalash
+    # 2. Web serverni Render uchun darhol ishga tushirish (Health check muvaffaqiyatli o'tishi uchun)
+    try:
+        await start_web_server()
+    except Exception as e:
+        logging.warning(f"Web server xatosi: {e}")
+
+    # 3. Webhooklarni tozalash
     try:
         await admin_bot.delete_webhook(drop_pending_updates=True)
         await user_bot.delete_webhook(drop_pending_updates=True)
     except Exception as e:
-        logging.warning(f"Webhook tozalashda xatolik: {e}")
+        logging.warning(f"Webhook tozalash ogohlantirishi: {e}")
 
-    # Web serverni ishga tushirish (Render uchun)
-    try:
-        await start_web_server()
-    except Exception as e:
-        logging.warning(f"Web server xatosi (local rejimda bu muhim emas): {e}")
-
-    print("Botlar so'rovlarni qabul qilishga tayyor! (Polling boshlandi)")
-    
-    # Ikkala botni parallel ishga tushirish
+    # 4. Ikkala botni mustaqil ravishda parallel yurgazish (Biri to'xtasa ham ikkinchisi ishlayveradi)
     await asyncio.gather(
-        admin_dp.start_polling(admin_bot),
-        user_dp.start_polling(user_bot)
+        run_admin_bot(),
+        run_user_bot()
     )
 
 if __name__ == "__main__":
