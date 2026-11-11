@@ -118,6 +118,8 @@ async def cancel_action(message: Message, state: FSMContext):
 
 # --- 👥 Multi-Admin Boshqaruvi ---
 @admin_dp.message(F.text == "👥 Adminlar boshqaruvi")
+@admin_dp.message(Command("admin"))
+@admin_dp.message(Command("admins"))
 async def manage_admins(message: Message):
     if not db.is_admin(message.from_user.id):
         return
