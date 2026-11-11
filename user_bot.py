@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import html
+import re
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -343,6 +344,83 @@ async def process_search(message: Message, state: FSMContext):
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
+
+# --- Kanaldan Avtomatik O'yin/Ilovalarni Qabul Qilish ---
+@user_dp.channel_post()
+async def auto_capture_channel_post(message: Message):
+    text = message.text or message.caption or ""
+    photo_id = message.photo[-1].file_id if message.photo else None
+    file_id = message.document.file_id if message.document else None
+    file_name = message.document.file_name if message.document else None
+    
+    # Agar faqat fayl (APK) yuborilgan bo'lsa va avvalgi postga biriktirish kerak bo'lsa:
+    if file_id and (not text or len(text) < 15):
+        conn = db.get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM items WHERE file_id IS NULL ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+        if row:
+            cur.execute("UPDATE items SET file_id = ?, file_name = ? WHERE id = ?", (file_id, file_name, row['id']))
+            conn.commit()
+            logging.info(f"Fayl #{row['id']} postiga avtomatik biriktirildi: {file_name}")
+        conn.close()
+        return
+
+    if not text:
+        return
+
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    if not lines:
+        return
+
+    first_line = lines[0]
+    title = first_line.split("—")[0].split("-")[0].strip()
+    desc = first_line[len(title):].lstrip("— -").strip() if len(title) < len(first_line) else "Ajoyib o'yin"
+    if not desc:
+        desc = "Ajoyib o'yin"
+
+    # Janrni topish
+    genre = "boshqa"
+    for word in text.split():
+        if word.startswith("#") and word.lower() not in ["#games", "#apk", "#app", "#mod", "#ilova"]:
+            genre = word.replace("#", "").strip()
+            break
+
+    # Versiya
+    version = "1.0"
+    m_ver = re.search(r'Versiya:\s*([^\n\r]+)', text, re.IGNORECASE)
+    if m_ver:
+        version = m_ver.group(1).strip()
+
+    # Android
+    android_ver = "Barcha versiyalar"
+    m_and = re.search(r'Android(?:\s*versiyasi)?:\s*([^\n\r]+)', text, re.IGNORECASE)
+    if m_and:
+        android_ver = m_and.group(1).strip()
+
+    # Mod
+    mod_info = "Mod / To'liq versiya"
+    m_mod = re.search(r'Mod(?:ifikatsiyalar)?:\s*([^\n\r]+)', text, re.IGNORECASE)
+    if m_mod:
+        mod_info = m_mod.group(1).strip()
+
+    item_type = "app" if any(w in text.lower() for w in ["dastur", "ilova", "#app", "program"]) else "game"
+
+    db.add_item(
+        item_type=item_type,
+        title=title,
+        description=desc,
+        genre=genre,
+        android_ver=android_ver,
+        version=version,
+        mod_info=mod_info,
+        photo_file_id=photo_id,
+        file_id=file_id,
+        file_name=file_name,
+        channel_id=f"@{message.chat.username}" if message.chat.username else str(message.chat.id),
+        post_message_id=message.message_id
+    )
+    logging.info(f"Kanaldan avtomatik yangi {item_type} qo'shildi: {title}")
 
 # --- ℹ️ Ma'lumot ---
 @user_dp.message(F.text == "ℹ️ Ma'lumot")

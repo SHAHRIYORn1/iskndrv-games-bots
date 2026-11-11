@@ -16,6 +16,23 @@ logging.basicConfig(
 async def handle_ping(request):
     return web.Response(text="Iskndrv Games Bots are running 24/7!", status=200)
 
+async def keep_awake_pinger():
+    """Render bepul serverini 15 daqiqadan so'ng uxlab qolishini oldini olish uchun har 8 daqiqada o'zini ping qiladi"""
+    await asyncio.sleep(60) # 1 daqiqa kutib boshlaydi
+    app_url = os.environ.get("RENDER_EXTERNAL_URL", "https://iskndrv-games-bots.onrender.com")
+    health_url = f"{app_url}/health"
+    
+    while True:
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(health_url, timeout=10) as resp:
+                    logging.info(f"Keep-awake ping yuborildi: {health_url} (Status: {resp.status})")
+        except Exception as e:
+            logging.warning(f"Keep-awake ping ogohlantirishi: {e}")
+        # Har 8 daqiqada (480 soniya) qaytariladi
+        await asyncio.sleep(480)
+
 async def start_web_server():
     app = web.Application()
     app.router.add_get("/", handle_ping)
@@ -23,7 +40,6 @@ async def start_web_server():
     runner = web.AppRunner(app)
     await runner.setup()
     
-    # Render PORT muhit o'zgaruvchisini beradi (odatda 10000)
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
@@ -70,10 +86,11 @@ async def main():
     except Exception as e:
         logging.warning(f"Webhook tozalash ogohlantirishi: {e}")
 
-    # 4. Ikkala botni mustaqil ravishda parallel yurgazish (Biri to'xtasa ham ikkinchisi ishlayveradi)
+    # 4. Ikkala botni va doimiy uyg'oq tutuvchi tizimni parallel yurgazish
     await asyncio.gather(
         run_admin_bot(),
-        run_user_bot()
+        run_user_bot(),
+        keep_awake_pinger()
     )
 
 if __name__ == "__main__":
