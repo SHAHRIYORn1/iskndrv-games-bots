@@ -48,17 +48,19 @@ class ChannelManage(StatesGroup):
 class BroadcastState(StatesGroup):
     waiting_message = State()
 
+class AdminAddState(StatesGroup):
+    waiting_user_id = State()
+
 # --- Klaviaturalar ---
-def get_admin_keyboard():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📝 Kanalga post joylash (O'yin/Ilova)")],
-            [KeyboardButton(text="🔗 Majburiy obuna kanallari"), KeyboardButton(text="📢 Xabar tarqatish (Broadcast)")],
-            [KeyboardButton(text="🎮 O'yin va Ilovalar ro'yxati"), KeyboardButton(text="📊 Statistika")],
-            [KeyboardButton(text="⚙️ Standart kanal sozlash")]
-        ],
-        resize_keyboard=True
-    )
+def get_admin_keyboard(user_id: int):
+    kb = [
+        [KeyboardButton(text="📝 Kanalga post joylash (O'yin/Ilova)")],
+        [KeyboardButton(text="🔗 Majburiy obuna kanallari"), KeyboardButton(text="📢 Xabar tarqatish (Broadcast)")],
+        [KeyboardButton(text="🎮 O'yin va Ilovalar ro'yxati"), KeyboardButton(text="📊 Statistika")]
+    ]
+    # Faqat Bosh Admin yoki barcha adminlar uchun qo'shimcha menyu
+    kb.append([KeyboardButton(text="👥 Adminlar boshqaruvi"), KeyboardButton(text="⚙️ Standart kanal sozlash")])
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 def get_cancel_keyboard():
     return ReplyKeyboardMarkup(
@@ -76,17 +78,18 @@ async def cmd_start(message: Message, state: FSMContext):
 
     if db.is_admin(user_id):
         db.add_admin(user_id, username, full_name)
+        role = "👑 Bosh Administrator" if user_id == config.OWNER_ID else "👮‍♂️ Administrator"
         await message.answer(
-            f"Salom, Administrator <b>{full_name}</b>!\n\n"
+            f"Salom, {role} <b>{full_name}</b>!\n\n"
             f"Boshqaruv paneliga xush kelibsiz. Bu yerdan o'yin/ilovalarni kanalga chiroyli formatda joylashingiz, "
-            f"majburiy obuna kanallarini boshqarishingiz va foydalanuvchilarga xabar tarqatishingiz mumkin.",
+            f"majburiy obuna kanallarini boshqarishingiz va jamoangiz bilan botni yurgazishingiz mumkin.",
             parse_mode="HTML",
-            reply_markup=get_admin_keyboard()
+            reply_markup=get_admin_keyboard(user_id)
         )
     else:
         await message.answer(
             "⛔ <b>Kechirasiz, bu bot faqat administratorlar uchun!</b>\n\n"
-            "Agar siz bot egasi bo'lsangiz, parolni yuboring:\n"
+            "Agar sizga adminlik berilgan bo'lsa, maxfiy parolni yuboring:\n"
             "<code>/setadmin PAROL</code>",
             parse_mode="HTML"
         )
@@ -95,11 +98,15 @@ async def cmd_start(message: Message, state: FSMContext):
 async def cmd_setadmin(message: Message):
     parts = message.text.split(maxsplit=1)
     if len(parts) > 1 and parts[1].strip() == config.ADMIN_SECRET_KEY:
-        db.add_admin(message.from_user.id, message.from_user.username or "", message.from_user.full_name or "")
+        user_id = message.from_user.id
+        username = message.from_user.username or ""
+        full_name = html.escape(message.from_user.full_name or "")
+        db.add_admin(user_id, username, full_name)
         await message.answer(
-            "✅ <b>Tabriklaymiz! Siz muvaffaqiyatli administrator bo'ldingiz!</b>",
+            "✅ <b>Tabriklaymiz! Siz muvaffaqiyatli administrator bo'ldingiz!</b>\n"
+            "Endi siz ham bot orqali kanallarni va postlarni boshqara olasiz.",
             parse_mode="HTML",
-            reply_markup=get_admin_keyboard()
+            reply_markup=get_admin_keyboard(user_id)
         )
     else:
         await message.answer("❌ Noto'g'ri parol!")
@@ -107,7 +114,96 @@ async def cmd_setadmin(message: Message):
 @admin_dp.message(F.text == "❌ Bekor qilish")
 async def cancel_action(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("Amal bekor qilindi.", reply_markup=get_admin_keyboard())
+    await message.answer("Amal bekor qilindi.", reply_markup=get_admin_keyboard(message.from_user.id))
+
+# --- 👥 Multi-Admin Boshqaruvi ---
+@admin_dp.message(F.text == "👥 Adminlar boshqaruvi")
+async def manage_admins(message: Message):
+    if not db.is_admin(message.from_user.id):
+        return
+
+    admins = db.get_all_admins()
+    is_owner = (message.from_user.id == config.OWNER_ID)
+    
+    text = (
+        "👥 <b>Administratorlar ro'yxati (Multi-Admin):</b>\n\n"
+        f"🔐 <b>Joriy admin paroli:</b> <code>{config.ADMIN_SECRET_KEY}</code>\n"
+        f"<i>Yangi admin qo'shish uchun unga shu buyruqni bering:</i>\n"
+        f"<code>/setadmin {config.ADMIN_SECRET_KEY}</code>\n\n"
+        "<b>Barcha adminlar:</b>\n"
+    )
+
+    buttons = []
+    # Agar ro'yxat bo'sh bo'lsa va faqat egasi bo'lsa
+    found_owner = False
+    for idx, adm in enumerate(admins, 1):
+        uid = adm['user_id']
+        name = html.escape(adm['full_name'] or adm['username'] or str(uid))
+        role_badge = "👑 Bosh Admin" if uid == config.OWNER_ID else "👮‍♂️ Admin"
+        if uid == config.OWNER_ID:
+            found_owner = True
+        text += f"{idx}. {role_badge}: <b>{name}</b> (ID: <code>{uid}</code>)\n"
+
+        # Bosh admin boshqalarni o'chira oladi (o'zidan tashqari)
+        if is_owner and uid != config.OWNER_ID:
+            buttons.append([InlineKeyboardButton(text=f"🗑 O'chirish: {name[:15]}", callback_data=f"del_admin_{uid}")])
+
+    if not found_owner and is_owner:
+        text += f"👑 Bosh Admin: <b>Siz</b> (ID: <code>{config.OWNER_ID}</code>)\n"
+
+    if is_owner:
+        buttons.append([InlineKeyboardButton(text="➕ ID orqali admin qo'shish", callback_data="add_admin_by_id")])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+@admin_dp.callback_query(F.data == "add_admin_by_id")
+async def cb_add_admin_by_id(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != config.OWNER_ID:
+        await callback.answer("Faqat Bosh Admin yangi admin qo'sha oladi!", show_alert=True)
+        return
+    await callback.answer()
+    await state.set_state(AdminAddState.waiting_user_id)
+    await callback.message.answer(
+        "Admin qilmoqchi bo'lgan foydalanuvchining <b>Telegram ID raqamini</b> yuboring (Masalan: <code>123456789</code>):\n\n"
+        "<i>(Yoki unga maxfiy parolni berishingiz mumkin: <code>/setadmin " + config.ADMIN_SECRET_KEY + "</code>)</i>",
+        parse_mode="HTML",
+        reply_markup=get_cancel_keyboard()
+    )
+
+@admin_dp.message(AdminAddState.waiting_user_id)
+async def process_admin_id(message: Message, state: FSMContext):
+    inp = message.text.strip()
+    if not inp.isdigit():
+        await message.answer("Iltimos, faqat raqamlardan iborat Telegram ID yuboring:", reply_markup=get_cancel_keyboard())
+        return
+
+    new_admin_id = int(inp)
+    db.add_admin(new_admin_id, "", f"Admin #{new_admin_id}")
+    await state.clear()
+    await message.answer(
+        f"✅ <b>Yangi administrator muvaffaqiyatli qo'shildi!</b> (ID: <code>{new_admin_id}</code>)\n"
+        "Endi u ham botdan to'liq foydalana oladi.",
+        parse_mode="HTML",
+        reply_markup=get_admin_keyboard(message.from_user.id)
+    )
+
+@admin_dp.callback_query(F.data.startswith("del_admin_"))
+async def cb_delete_admin(callback: CallbackQuery):
+    if callback.from_user.id != config.OWNER_ID:
+        await callback.answer("Faqat Bosh Admin adminlarni o'chira oladi!", show_alert=True)
+        return
+    target_id = int(callback.data.split("_")[2])
+    if target_id == config.OWNER_ID:
+        await callback.answer("Bosh Adminni o'chirib bo'lmaydi!", show_alert=True)
+        return
+
+    db.remove_admin(target_id)
+    await callback.answer("Admin muvaffaqiyatli o'chirildi!", show_alert=True)
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
 
 # --- Statistika ---
 @admin_dp.message(F.text == "📊 Statistika")
@@ -118,10 +214,12 @@ async def show_stats(message: Message):
     games_cnt = db.count_items("game")
     apps_cnt = db.count_items("app")
     channels = db.get_mandatory_channels()
+    admins = db.get_all_admins()
 
     text = (
         "📊 <b>Tizim Statistikasi:</b>\n\n"
         f"👥 Asosiy bot foydalanuvchilari: <b>{users_cnt}</b> ta\n"
+        f"👮‍♂️ Administratorlar soni: <b>{len(admins)}</b> ta\n"
         f"🎮 Qo'shilgan o'yinlar: <b>{games_cnt}</b> ta\n"
         f"📱 Qo'shilgan ilovalar: <b>{apps_cnt}</b> ta\n"
         f"🔗 Majburiy kanallar soni: <b>{len(channels)}</b> ta\n"
@@ -168,7 +266,6 @@ async def cb_toggle_force_sub(callback: CallbackQuery):
     msg = "Majburiy obuna yoqildi! Endi foydalanuvchilar kanallarga a'zo bo'lmaguncha botdan foydalana olmaydi." if new_val == "1" else "Majburiy obuna o'chirildi! Endi bot hech kimdan kanalga a'zo bo'lishni talab qilmaydi."
     await callback.answer(msg, show_alert=True)
     await callback.message.delete()
-    # Yangilangan ko'rinishni qayta chiqarish
     await manage_channels(callback.message)
 
 @admin_dp.callback_query(F.data == "add_new_channel")
@@ -201,7 +298,7 @@ async def process_channel_id(message: Message, state: FSMContext):
             is_mandatory=1
         )
         await state.clear()
-        await message.answer(f"✅ Kanal muvaffaqiyatli qo'shildi: <b>{html.escape(title)}</b>", parse_mode="HTML", reply_markup=get_admin_keyboard())
+        await message.answer(f"✅ Kanal muvaffaqiyatli qo'shildi: <b>{html.escape(title)}</b>", parse_mode="HTML", reply_markup=get_admin_keyboard(message.from_user.id))
 
     except Exception as e:
         await state.update_data(channel_id=chat_input, title=chat_input, username=chat_input if chat_input.startswith("@") else "")
@@ -229,7 +326,7 @@ async def process_channel_invite(message: Message, state: FSMContext):
         is_mandatory=1
     )
     await state.clear()
-    await message.answer("✅ Kanal qo'shildi va majburiy ro'yxatga kiritildi!", reply_markup=get_admin_keyboard())
+    await message.answer("✅ Kanal qo'shildi va majburiy ro'yxatga kiritildi!", reply_markup=get_admin_keyboard(message.from_user.id))
 
 @admin_dp.callback_query(F.data.startswith("del_chan_"))
 async def cb_delete_channel(callback: CallbackQuery):
@@ -478,7 +575,7 @@ async def cb_publish_post(callback: CallbackQuery, state: FSMContext):
             f"Kanal: {html.escape(target_ch)}\n"
             f"Asosiy bot (@IskndrvGames_bot) orqali ham buni ko'rish mumkin!",
             parse_mode="HTML",
-            reply_markup=get_admin_keyboard()
+            reply_markup=get_admin_keyboard(callback.from_user.id)
         )
 
     except Exception as e:
@@ -486,7 +583,7 @@ async def cb_publish_post(callback: CallbackQuery, state: FSMContext):
             f"❌ <b>Xatolik yuz berdi:</b> {html.escape(str(e))}\n\n"
             f"Eslatma: Bot <b>{html.escape(target_ch)}</b> kanalida Admin qilinganiga va xabar yozish huquqi borligiga ishonch hosil qiling!",
             parse_mode="HTML",
-            reply_markup=get_admin_keyboard()
+            reply_markup=get_admin_keyboard(callback.from_user.id)
         )
 
 @admin_dp.callback_query(PostCreation.confirm, F.data == "cancel_post")
@@ -496,7 +593,7 @@ async def cb_cancel_post(callback: CallbackQuery, state: FSMContext):
         await callback.message.delete()
     except Exception:
         pass
-    await callback.message.answer("Post bekor qilindi.", reply_markup=get_admin_keyboard())
+    await callback.message.answer("Post bekor qilindi.", reply_markup=get_admin_keyboard(callback.from_user.id))
 
 # --- O'yinlar va Ilovalar ro'yxati ---
 @admin_dp.message(F.text == "🎮 O'yin va Ilovalar ro'yxati")
@@ -545,7 +642,7 @@ async def process_broadcast(message: Message, state: FSMContext):
     await state.clear()
 
     if not users:
-        await message.answer("Bazada hali foydalanuvchilar mavjud emas.", reply_markup=get_admin_keyboard())
+        await message.answer("Bazada hali foydalanuvchilar mavjud emas.", reply_markup=get_admin_keyboard(message.from_user.id))
         return
 
     status_msg = await message.answer(f"⏳ Xabar tarqatish boshlandi... Jami: {len(users)} ta foydalanuvchi.")

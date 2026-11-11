@@ -106,6 +106,13 @@ def get_all_admins():
     conn.close()
     return [dict(r) for r in rows]
 
+def remove_admin(user_id: int):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM admins WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
 # --- Kanallar amallari ---
 def add_channel(channel_id: str, title: str, username: str, invite_link: str, is_mandatory: int = 1, is_post_target: int = 0):
     conn = get_connection()
