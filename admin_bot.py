@@ -634,7 +634,9 @@ async def start_broadcast(message: Message, state: FSMContext):
         return
     await state.set_state(BroadcastState.waiting_message)
     await message.answer(
-        "Foydalanuvchilarga yubormoqchi bo'lgan xabaringizni yuboring (Matn, rasm, video yoki havola bo'lishi mumkin):",
+        "Foydalanuvchilarga yubormoqchi bo'lgan xabaringizni yuboring (Matn, rasm, video yoki havola bo'lishi mumkin):\n\n"
+        "<i>Ushbu xabar asosiy bot (@IskndrvGames_bot) orqali barcha foydalanuvchilarga yetkaziladi.</i>",
+        parse_mode="HTML",
         reply_markup=get_cancel_keyboard()
     )
 
@@ -652,18 +654,20 @@ async def process_broadcast(message: Message, state: FSMContext):
     fail_count = 0
 
     from user_bot import user_bot
+    from broadcast_helper import send_to_user
     for u in users:
         uid = u['user_id']
         try:
-            await user_bot.copy_message(chat_id=uid, from_chat_id=message.chat.id, message_id=message.message_id)
+            await send_to_user(user_bot, uid, message)
             sent_count += 1
             await asyncio.sleep(0.05)
-        except Exception:
+        except Exception as e:
+            logging.error(f"Xabar yuborishda xatolik (User: {uid}): {e}")
             fail_count += 1
 
     await status_msg.edit_text(
         f"✅ <b>Xabar tarqatish yakunlandi!</b>\n\n"
-        f"Yetkazildi: <b>{sent_count}</b>\n"
-        f"Yetib bormadi (bloklagan): <b>{fail_count}</b>",
+        f"Yetkazildi: <b>{sent_count}</b> ta\n"
+        f"Yetib bormadi (bloklagan): <b>{fail_count}</b> ta",
         parse_mode="HTML"
     )
